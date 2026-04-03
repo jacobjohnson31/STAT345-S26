@@ -1,0 +1,410 @@
+---
+title: "STAT 345 Midterm Project"
+font: 12pt
+date: "3/10/2026"
+output:
+  pdf_document: default
+  word_document: default
+  html_document: default
+---
+
+> "Our offense is like the Pythagorean Theorem. There is no answer!", _Shaquille O'Neal_
+
+
+
+## The Background
+
+Your role for the midterm project is that of data analyst intern at an NBA (professional basketball) team. Your direct supervisor (also part of the analytics team) has asked you to create a data visualization to illustrate how (or if) the team's shots have changed over time. After some initial clarifying questions, your supervisor confessed that they had seen some pretty cool shot charts at http://savvastjortjoglou.com/nba-shot-sharts.html and would like to extend the ideas a bit. 
+
+Your data for the midterm project may come from a variety of sources, including the NBA directly, as well as Basketball-Reference, HoopsHype, and others. There are several ways to access the data, but perhaps the simplest is through a package. There are a few options (each with some benefits, drawbacks, and potential headaches):
+
+- `nbastatR`
+- `hoopR`
+- `AdvancedBasketballStats`
+
+Note: if you would prefer to analyze college basketball, packages exist for that too (such as `cbbdata`). If you would prefer to look into a different sport, we can investigate that as well. Please let me know in advance if you intend to go down one of these alternate routes. 
+
+
+## The Tasks
+
+1. (30 points) Produce a graphic displaying the shot locations for a particular team over several years. Some notes:
+
+   - Colors should be chosen to reflect the team, if possible.  **DONE**
+   - There are likely many overlaid points -- handle this by either binning these by location, or use opacity and size. **DONE**
+   - Incorporate information about whether the shot was made or not (shape, color, etc.). **DONE**
+   - The graphic should be well-labeled, titled, etc.
+   - Start with a graph for a single year, then extend to several years. Up to 20 years of shot data is available. Either facet these by year or animate using the years.
+   - You'll want to figure out what the coordinates mean somehow. This might be through the documentation, but could also be determined using aspects of the data itself and the dimensions of an NBA court.
+    - Put a basketball court on the background of the image (you'll need to scale it appropriately).
+
+```{r}
+#1 installing lib
+install.packages("hoopR")
+```
+```{r}
+#calling needed libs
+library(hoopR)
+library(hexbin)
+library(ggplot2)
+library(tidyverse)
+```
+
+
+```{r}
+#1 code
+
+#loading data 'play by play'
+nba_pbp = load_nba_pbp(2021:hoopR::most_recent_nba_season())
+
+
+#pulling year out of the 'game_date' column
+nba_pbp = nba_pbp %>% 
+  mutate(year = year(ymd(game_date)))
+unique(nba_pbp$year)    #checking
+
+#filtering only mke buck's plays
+bucks_pbp = nba_pbp %>% 
+  filter((home_team_id == 15 | away_team_id == 15), #choosing team
+         shooting_play == TRUE, #only shooting plays (no steals, etc.)
+         )
+bucks_pbp = bucks_pbp %>% 
+  filter(team_id==15) #only bucks plays
+
+
+
+##Mutating main data frame to fix plotting issues
+#preping coordinates for plotting
+shots_halfcourt = bucks_pbp %>%
+  mutate(
+    #swapping x and y axes
+    x_raw = coordinate_y,
+    y_raw = coordinate_x,
+    
+    #folding courting from full to half court
+    y_half = ifelse(y_raw > 0, -y_raw, y_raw),
+    
+    #changing x range
+    x_half = x_raw + 25,
+    
+    #changing y range
+    y_half = y_half + 44.75,
+    y_half = y_half * (47 / 44.75)
+  )
+#adding a col to determine if a shot was made or not (1=make, 0=not) (mainly for counts if needed)
+shots_halfcourt = shots_halfcourt %>% 
+  mutate(shot_made = as.numeric(score_value > 0))
+
+#create col for legend use
+shots_halfcourt$Result = factor(
+  ifelse(shots_halfcourt$score_value > 0, "Make", "Miss"),
+  levels = c("Make", "Miss")
+)
+#changing season variable to a factor so facet_wrap() graph subtitles work
+shots_halfcourt$season = as.factor(shots_halfcourt$season)
+
+```
+
+
+```{r}
+#Court creation Idea from 'https://www.rpubs.com/nMenai21/1363086', court is not exact I made some changes
+#Change example was adding an arc function instead of estimating
+
+###plotting shots
+
+#Function for getting arc data (for plotting)
+# Inputs: xc=x coord of center pt. yc=y coord of center pt. r=radius of arc,
+#start_deg=starting degree of arc, end_deg=ending degree of arc, n=# for smoothness of the curve (higher #==more smooth)
+# Outputs: data frame of points for arc for plotting
+get_arc = function(xc, yc, r, start_deg, end_deg, n = 100) {
+  theta = seq(start_deg * pi / 180, end_deg * pi / 180, length.out = n)
+  data.frame(x = xc + r * cos(theta), y = yc + r * sin(theta))
+}
+
+# Curved line data frames
+#3-Point Line (Calculated angle limit for the side-court clip)
+angle_limit = asin((14 - 4.5) / 23.75) * 180 / pi
+three_pt_arc = get_arc(25, 4.5, 23.75, angle_limit, 180 - angle_limit)
+
+#Free Throw Circle (Top solid, Bottom dashed)
+ft_top = get_arc(25, 19, 6, 0, 180)
+ft_bottom = get_arc(25, 19, 6, 180, 360)
+
+#Restricted Area (Curved part under/near the hoop)
+restricted = get_arc(25, 4.5, 4, 0, 180)
+
+#Half Court Circle
+half_court = get_arc(25, 47, 6, 180, 360)
+
+##COLORS
+bucks_green = "#00471B" #buck green
+bucks_cream = "#EEE1C6" #buck cream
+court_wood  = "#E9D2A1" #Tan/Wood color for the floor
+
+
+
+#Creating the half court
+court = ggplot() +
+  coord_fixed(xlim = c(0, 50), ylim = c(0, 47)) +
+  
+  #Coloring the background out of bounds bucks_green
+  theme_void() +
+  theme(plot.background = element_rect(fill=bucks_green, color=NA)) +
+  
+  #Out of bounds & Paint lines
+  geom_rect(aes(xmin=0, xmax=50, ymin=0, ymax=47), fill=court_wood, color="black", linewidth=1) + #out of bounds box
+  geom_rect(aes(xmin=17, xmax=33, ymin=0, ymax=19), fill=bucks_green, color=bucks_cream,
+            linewidth=1) + #paint box
+
+  #3-Point Line (line side segments & top arc)
+  geom_segment(aes(x=3, y=0, xend=3, yend=14)) + #left line
+  geom_segment(aes(x=47, y=0, xend=47, yend=14)) + #right line
+  geom_path(data = three_pt_arc, aes(x, y)) + #top curve
+
+  #Free Throw Lines (curves)
+  geom_path(data = ft_top, aes(x, y)) + #ft top curve
+  geom_path(data = ft_bottom, aes(x, y), linetype = "dashed") + #ft bottom dashed curve
+
+  #Half court curve
+  geom_path(data = half_court, aes(x, y)) +
+  
+  #Restricted area curve
+  geom_path(data = restricted, aes(x, y)) +
+
+  #Rim & Backboard
+  geom_segment(aes(x=22, y=4, xend=28, yend=4), linewidth=1.5) +
+  geom_point(aes(x=25, y=4.5), color="black", size=4) +
+  
+  labs(title = "Milwaukee Bucks ~ Cream City Court") +
+  theme(plot.title = element_text(color="white", hjust=0.5, size=18, face="bold"))
+
+
+
+#redoing court to make it a list of layers, instead of 1 (so it dosen't messed facet_wrap())
+court_layers <- list(
+  coord_fixed(xlim = c(0, 50), ylim = c(0, 47)),
+  theme_void(),
+  theme(
+    plot.background = element_rect(fill = bucks_green, color = NA),
+    plot.title = element_text(color = "white", hjust = 0.5, size = 18, face = "bold"),
+    legend.text = element_text(color = 'white'),
+    legend.title = element_text(color = 'white'),
+    strip.text = element_text(color = "white", face = "bold", size = 12) # For facet labels
+  ),
+  
+  #Base Floor
+  geom_rect(aes(xmin=0, xmax=50, ymin=0, ymax=47), fill=court_wood, color="black", linewidth=1),
+  
+  #Paint - Note: using inherit.aes = FALSE so it doesn't look for 'Result' or 'Season'
+  geom_rect(aes(xmin=17, xmax=33, ymin=0, ymax=19), fill=bucks_green, color=bucks_cream, linewidth=1, inherit.aes = FALSE),
+
+  #3-Point Lines
+  geom_segment(aes(x=3, y=0, xend=3, yend=14), inherit.aes = FALSE),
+  geom_segment(aes(x=47, y=0, xend=47, yend=14), inherit.aes = FALSE),
+  geom_path(data = three_pt_arc, aes(x, y), inherit.aes = FALSE),
+
+  #FT and Restricted
+  geom_path(data = ft_top, aes(x, y), inherit.aes = FALSE),
+  geom_path(data = ft_bottom, aes(x, y), linetype = "dashed", inherit.aes = FALSE),
+  geom_path(data = half_court, aes(x, y), inherit.aes = FALSE),
+  geom_path(data = restricted, aes(x, y), inherit.aes = FALSE),
+
+  #Rim & Backboard
+  geom_segment(aes(x=22, y=4, xend=28, yend=4), linewidth=1.5, inherit.aes = FALSE),
+  geom_point(aes(x=25, y=4.5), color="black", size=4, inherit.aes = FALSE)
+)
+```
+
+
+
+
+```{r}
+#plotting shots
+makes_and_misses = court +
+  geom_jitter(
+    data = shots_halfcourt,
+    aes(
+      x = x_half,
+      y = y_half,
+      shape = Result,
+      color = Result),
+    size = 1.8,
+    alpha = 0.6) +
+  scale_shape_manual(
+    values = c("Make" = 19, "Miss" = 4),  # dot for make, X for miss
+    name = "Result") +
+  scale_color_manual(
+    values = c("Make" = "green", "Miss" = "red"),
+    name = "Result") +
+  guides(
+    shape = guide_legend(override.aes = list(color = c("green", "red")))) +
+  theme(
+    legend.text = element_text(color = 'white'),
+    legend.title = element_text(color = 'white'))
+
+
+
+#hex bin points on court (shot count)
+hex_bin_shot_count = court +
+  geom_hex(data = shots_halfcourt,
+           aes(x = x_half, y = y_half),
+           bins = 30,           # Adjust this for larger/smaller hexes
+           color = "white",     # Adds a border to separate hexes
+           alpha = 0.8) +       # Keeps the court lines slightly visible
+  scale_fill_viridis_c(option = "viridis", limits=c(1,50)) + # High-contrast color scale
+  labs(fill = "Shot Count")
+
+
+#hex bin field goal%
+hex_bin_fg_percentage = court +
+  stat_summary_hex(
+    data = shots_halfcourt,
+    aes(
+      x = x_half, y = y_half,
+      z = shot_made,
+      fill = after_stat(value)
+    ),
+    bins = 30,
+    fun = mean,
+    color = "white"
+  ) +
+  scale_fill_viridis_c(
+    option = "viridis",
+    labels = scales::percent,
+    limits = c(0, 1),
+    name = "Field Goal %"
+  )
+     
+
+
+```
+
+
+
+
+
+
+
+   
+2. (30 points) Summarize the graphic/series of graphics into a digestible, bullet-point brief report for front-office staff. Some notes:
+
+   - The main body of the report should be very brief -- just the graphic(s) and the bullet-pointed list of findings, which should be short and clear.
+   - Include a more detailed explanation of these bullet points, for further reading by those interested. This section should follow the bullet-point section, but should be organized similarly for reference. 
+   - Your report to the front-office shouldn't include any code.
+   - This report should be generated using RMarkdown. However, the choice of output type (Word, PDF, or HTML) is up to you (you could even make slides if you want to). 
+   
+3. (30 points) Write and document clean, efficient, reproducible code. Some notes:
+
+   - This code will be viewed by your direct supervisor.
+   - The code file should include your code to gather, join, and clean the data; the code to generate the graphic(s) presented; and your commentary on the results (so, a single .rmd file, or an .rmd file that sources an .r file).
+   - Your code should be clean, organized, and reproducible. Remove unnecessary/scratch/exploratory code.
+   - Your code should be well commented. In particular, any decisions or judgement calls made in the analysis process should be explained/justified. Sections of code should be identified even if not functionalized (including purpose, data/argument inputs, analysis outputs).
+   
+4. (10 points) Above and Beyond. Choose either option below. You are welcome to explore both, but only one is required. 
+
+  - Option 1: Explore the data a bit, and create a graphic that uses (or incorporates) different information than what was used above. Some notes:
+    - Create an additional graphic that incorporates at least one additional variable not previously used (this should add to the graphic in part 1). The additional data should be drawn from a different dataset (function call) than the original graphic used. These two (or more) datasets may need to be joined appropriately.
+    - You can either add more information to the plot above, or create a different plot. 
+     - Formatting, labelling, etc. are all important here too.
+    - Adding marginal densities or other "bells and whistles" might offer additional insight.
+    - This graphic should be included at the end of the report (after the more detailed explanations). 
+     - You should include a brief description of the graphic (highlighting the different/additional information used).
+  - Option 2: If the NBA were to incorporate a 4-point shot, where would you draw a 4-point arc? Some notes:
+    - You likely should base your decision at least partly on proportion of shots made from a given range. You might consider an expected value calculation here.
+    - Your arc can be shaped as you see fit; simple arcs are sufficient for this exploration.
+    - Provide an example of a consequence (positive or negative) if a 4-point shot was incorporated. (e.g., "my_favorite_player's season point total would increase by x%")
+    - You do not need to create a plot representing your arc, though you are welcome to do so!
+
+  
+## The Deliverables
+
+1. Upload your report and code file(s) to GitHub by 5:00pm on Friday, April 3.
+2. Submit (on Canvas) your report, code, and link to your GitHub repository by 5:00pm on Friday, April 3.
+  
+  
+  
+
+```{r, warning=FALSE}
+#Define the court as a list of layers instead of a full plot
+court_layers <- list(
+  coord_fixed(xlim = c(0, 50), ylim = c(0, 47)),
+  theme_void(),
+  theme(
+    plot.background = element_rect(fill = bucks_green, color = NA),
+    plot.title = element_text(color = "white", hjust = 0.5, size = 18, face = "bold"),
+    legend.text = element_text(color = 'white'),
+    legend.title = element_text(color = 'white'),
+    strip.text = element_text(color = "white", face = "bold", size = 12) # For facet labels
+  ),
+  
+  # Base Floor
+  geom_rect(aes(xmin=0, xmax=50, ymin=0, ymax=47), fill=court_wood, color="black", linewidth=1),
+  
+  # Paint - Note: use inherit.aes = FALSE so it doesn't look for 'Result' or 'Season'
+  geom_rect(aes(xmin=17, xmax=33, ymin=0, ymax=19), fill=bucks_green, color=bucks_cream, linewidth=1, inherit.aes = FALSE),
+
+  # 3-Point Lines
+  geom_segment(aes(x=3, y=0, xend=3, yend=14), inherit.aes = FALSE),
+  geom_segment(aes(x=47, y=0, xend=47, yend=14), inherit.aes = FALSE),
+  geom_path(data = three_pt_arc, aes(x, y), inherit.aes = FALSE),
+
+  # FT and Restricted
+  geom_path(data = ft_top, aes(x, y), inherit.aes = FALSE),
+  geom_path(data = ft_bottom, aes(x, y), linetype = "dashed", inherit.aes = FALSE),
+  geom_path(data = half_court, aes(x, y), inherit.aes = FALSE),
+  geom_path(data = restricted, aes(x, y), inherit.aes = FALSE),
+
+  # Rim & Backboard
+  geom_segment(aes(x=22, y=4, xend=28, yend=4), linewidth=1.5, inherit.aes = FALSE),
+  geom_point(aes(x=25, y=4.5), color="black", size=4, inherit.aes = FALSE)
+)
+
+#Build wrapped jitter plot across seasons
+ggplot(shots_halfcourt, aes(x = x_half, y = y_half)) +
+  court_layers + # Add the list of court elements
+  geom_jitter(
+    aes(shape = Result, color = Result),
+    size = 1.8, 
+    alpha = 0.6
+  ) +
+  scale_shape_manual(values = c("Make" = 19, "Miss" = 4), name = "Result") +
+  scale_color_manual(values = c("Make" = "green", "Miss" = "red"), name = "Result") +
+  guides(shape = guide_legend(override.aes = list(color = c("green", "red")))) +
+  facet_wrap(~season) +
+  labs(title = "Milwaukee Bucks ~ Makes and Misses by Season")
+
+#Milwaukee Bucks ~ Shot Density by Season
+ggplot(shots_halfcourt, aes(x = x_half, y = y_half)) +
+  court_layers +  # Add court first
+  geom_hex(
+    bins = 30,
+    color = "white",
+    alpha = 0.8
+  ) +
+  scale_fill_viridis_c(
+    option = "viridis", 
+    limits = c(1, 50),
+    name = "Shot Count"
+  ) +
+  facet_wrap(~season) +
+  labs(title = "Milwaukee Bucks ~ Shot Density by Season")
+
+
+ggplot(shots_halfcourt, aes(x = x_half, y = y_half, z = shot_made)) +
+  court_layers +  # Add court first
+  stat_summary_hex(
+    fun = mean,
+    bins = 30,
+    color = "white",
+    alpha = 0.8
+  ) +
+  scale_fill_viridis_c(
+    option = "viridis",
+    labels = scales::percent,
+    limits = c(0, 1),
+    name = "FG%"
+  ) +
+  facet_wrap(~season) +
+  labs(title = "Milwaukee Bucks ~ Shooting Efficiency by Season")
+```
+  
+

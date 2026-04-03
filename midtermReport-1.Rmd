@@ -1,0 +1,284 @@
+---
+title: "Milwaukee Bucks Shooting Report, 2021-2026"
+author: "Jacob Johnson"
+date: "2026-03-28"
+output: 
+  html_document : default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE)
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE, results='hide', fig.show='hide'}
+#installing need stat lib
+#install.packages("hoopR")
+
+#calling needed libs
+library(hoopR)
+library(hexbin)
+library(ggplot2)
+library(tidyverse)
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE, results='hide', fig.show='hide'}
+##WORKING WITH THE DATA, MANIPULATING, EDA, ETC.
+#loading data 'play by play'
+nba_pbp = load_nba_pbp(2021:hoopR::most_recent_nba_season())
+
+
+#pulling year out of the 'game_date' column
+nba_pbp = nba_pbp %>% 
+  mutate(year = year(ymd(game_date)))
+unique(nba_pbp$year)    #checking
+
+#filtering only mke buck's plays
+bucks_pbp = nba_pbp %>% 
+  filter((home_team_id == 15 | away_team_id == 15), #choosing team
+         shooting_play == TRUE, #only shooting plays (no steals, etc.)
+         )
+bucks_pbp = bucks_pbp %>% 
+  filter(team_id==15) #only bucks plays
+
+
+
+##Mutating main data frame to fix plotting issues
+#preping coordinates for plotting
+shots_halfcourt = bucks_pbp %>%
+  mutate(
+    #swapping x and y axes
+    x_raw = coordinate_y,
+    y_raw = coordinate_x,
+    
+    #folding courting from full to half court
+    y_half = ifelse(y_raw > 0, -y_raw, y_raw),
+    
+    #changing x range
+    x_half = x_raw + 25,
+    
+    #changing y range
+    y_half = y_half + 44.75,
+    y_half = y_half * (47 / 44.75)
+  )
+#adding a col to determine if a shot was made or not (1=make, 0=not) (mainly for counts if needed)
+shots_halfcourt = shots_halfcourt %>% 
+  mutate(shot_made = as.numeric(score_value > 0))
+
+#create col for legend use
+shots_halfcourt$Result = factor(
+  ifelse(shots_halfcourt$score_value > 0, "Make", "Miss"),
+  levels = c("Make", "Miss")
+)
+#changing season variable to a factor so facet_wrap() graph subtitles work
+shots_halfcourt$season = as.factor(shots_halfcourt$season)
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE, results='hide', fig.show='hide'}
+##DRAWING BASKETBALL COURT
+
+#Court creation Idea from 'https://www.rpubs.com/nMenai21/1363086', court is not exact I made some changes
+#Change example was adding an arc function instead of estimating
+
+###plotting shots
+
+#Function for getting arc data (for plotting)
+# Inputs: xc=x coord of center pt. yc=y coord of center pt. r=radius of arc,
+#start_deg=starting degree of arc, end_deg=ending degree of arc, n=# for smoothness of the curve (higher #==more smooth)
+# Outputs: data frame of points for arc for plotting
+get_arc = function(xc, yc, r, start_deg, end_deg, n = 100) {
+  theta = seq(start_deg * pi / 180, end_deg * pi / 180, length.out = n)
+  data.frame(x = xc + r * cos(theta), y = yc + r * sin(theta))
+}
+
+# Curved line data frames
+#3-Point Line (Calculated angle limit for the side-court clip)
+angle_limit = asin((14 - 4.5) / 23.75) * 180 / pi
+three_pt_arc = get_arc(25, 4.5, 23.75, angle_limit, 180 - angle_limit)
+
+#Free Throw Circle (Top solid, Bottom dashed)
+ft_top = get_arc(25, 19, 6, 0, 180)
+ft_bottom = get_arc(25, 19, 6, 180, 360)
+
+#Restricted Area (Curved part under/near the hoop)
+restricted = get_arc(25, 4.5, 4, 0, 180)
+
+#Half Court Circle
+half_court = get_arc(25, 47, 6, 180, 360)
+
+##COLORS
+bucks_green = "#00471B" #buck green
+bucks_cream = "#EEE1C6" #buck cream
+court_wood  = "#E9D2A1" #Tan/Wood color for the floor
+
+
+
+#Creating the half court
+court = ggplot() +
+  coord_fixed(xlim = c(0, 50), ylim = c(0, 47)) +
+  
+  #Coloring the background out of bounds bucks_green
+  theme_void() +
+  theme(plot.background = element_rect(fill=bucks_green, color=NA)) +
+  
+  #Out of bounds & Paint lines
+  geom_rect(aes(xmin=0, xmax=50, ymin=0, ymax=47), fill=court_wood, color="black", linewidth=1) + #out of bounds box
+  geom_rect(aes(xmin=17, xmax=33, ymin=0, ymax=19), fill=bucks_green, color=bucks_cream,
+            linewidth=1) + #paint box
+
+  #3-Point Line (line side segments & top arc)
+  geom_segment(aes(x=3, y=0, xend=3, yend=14)) + #left line
+  geom_segment(aes(x=47, y=0, xend=47, yend=14)) + #right line
+  geom_path(data = three_pt_arc, aes(x, y)) + #top curve
+
+  #Free Throw Lines (curves)
+  geom_path(data = ft_top, aes(x, y)) + #ft top curve
+  geom_path(data = ft_bottom, aes(x, y), linetype = "dashed") + #ft bottom dashed curve
+
+  #Half court curve
+  geom_path(data = half_court, aes(x, y)) +
+  
+  #Restricted area curve
+  geom_path(data = restricted, aes(x, y)) +
+
+  #Rim & Backboard
+  geom_segment(aes(x=22, y=4, xend=28, yend=4), linewidth=1.5) +
+  geom_point(aes(x=25, y=4.5), color="black", size=4) +
+  
+  labs(title = "Milwaukee Bucks ~ Cream City Court") +
+  theme(plot.title = element_text(color="white", hjust=0.5, size=18, face="bold"))
+
+
+
+#redoing court to make it a list of layers, instead of 1 (so it dosen't messed facet_wrap())
+court_layers <- list(
+  coord_fixed(xlim = c(0, 50), ylim = c(0, 47)),
+  theme_void(),
+  theme(
+    plot.background = element_rect(fill = bucks_green, color = NA),
+    plot.title = element_text(color = "white", hjust = 0.5, size = 18, face = "bold"),
+    legend.text = element_text(color = 'white'),
+    legend.title = element_text(color = 'white'),
+    strip.text = element_text(color = "white", face = "bold", size = 12) # For facet labels
+  ),
+  
+  #Base Floor
+  geom_rect(aes(xmin=0, xmax=50, ymin=0, ymax=47), fill=court_wood, color="black", linewidth=1),
+  
+  #Paint - Note: using inherit.aes = FALSE so it doesn't look for 'Result' or 'Season'
+  geom_rect(aes(xmin=17, xmax=33, ymin=0, ymax=19), fill=bucks_green, color=bucks_cream, linewidth=1, inherit.aes = FALSE),
+
+  #3-Point Lines
+  geom_segment(aes(x=3, y=0, xend=3, yend=14), inherit.aes = FALSE),
+  geom_segment(aes(x=47, y=0, xend=47, yend=14), inherit.aes = FALSE),
+  geom_path(data = three_pt_arc, aes(x, y), inherit.aes = FALSE),
+
+  #FT and Restricted
+  geom_path(data = ft_top, aes(x, y), inherit.aes = FALSE),
+  geom_path(data = ft_bottom, aes(x, y), linetype = "dashed", inherit.aes = FALSE),
+  geom_path(data = half_court, aes(x, y), inherit.aes = FALSE),
+  geom_path(data = restricted, aes(x, y), inherit.aes = FALSE),
+
+  #Rim & Backboard
+  geom_segment(aes(x=22, y=4, xend=28, yend=4), linewidth=1.5, inherit.aes = FALSE),
+  geom_point(aes(x=25, y=4.5), color="black", size=4, inherit.aes = FALSE)
+)
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE, results='hide', fig.show='hide'}
+
+###plotting shots on courts (over seasons/years with facet_wrap)
+
+#Plotting makes and misses 
+#Build wrapped jitter plot across seasons
+makes_and_misses_bySeason = ggplot(shots_halfcourt, aes(x = x_half, y = y_half)) +
+  court_layers + # Add the list of court elements
+  geom_jitter(
+    aes(shape = Result, color = Result),
+    size = 1.8, 
+    alpha = 0.6
+  ) +
+  scale_shape_manual(values = c("Make" = 19, "Miss" = 4), name = "Result") +
+  scale_color_manual(values = c("Make" = "green", "Miss" = "red"), name = "Result") +
+  guides(shape = guide_legend(override.aes = list(color = c("green", "red")))) +
+  facet_wrap(~season) +
+  labs(title = "Milwaukee Bucks ~ Makes and Misses by Season")
+
+#Shot Density by Season
+#Build wrapped jitter plot across seasons
+hex_bin_shot_count_bySeason = ggplot(shots_halfcourt, aes(x = x_half, y = y_half)) +
+  court_layers +  # Add court first
+  geom_hex(
+    bins = 30,
+    color = "white",
+    alpha = 0.8
+  ) +
+  scale_fill_viridis_c(
+    option = "viridis", 
+    limits = c(1, 50),
+    name = "Shot Count"
+  ) +
+  facet_wrap(~season) +
+  labs(title = "Milwaukee Bucks ~ Shot Density by Season")
+
+#Shooting Efficiency by Season
+#Build wrapped jitter plot across seasons
+hex_bin_fg_percentage_bySeason = ggplot(shots_halfcourt, aes(x = x_half, y = y_half, z = shot_made)) +
+  court_layers +  # Add court first
+  stat_summary_hex(
+    fun = mean,
+    bins = 30,
+    color = "white",
+    alpha = 0.8
+  ) +
+  scale_fill_viridis_c(
+    option = "viridis",
+    labels = scales::percent,
+    limits = c(0, 1),
+    name = "FG%"
+  ) +
+  facet_wrap(~season) +
+  labs(title = "Milwaukee Bucks ~ Shooting Efficiency by Season")
+```
+
+
+```{r, echo=FALSE}
+#displaying 'makes and misses' and 'shot density'
+makes_and_misses_bySeason
+hex_bin_shot_count_bySeason
+```
+
+## Findings
+
+- The restricted area in the paint over the years has stayed being the team's highest shot volume area. 
+- Beyond the three point line although spread out is next area with high density of shots taken.
+- Corner shots both in front and behind the three point line have also increased over time. 
+
+
+## More In Depth
+
+### Interior & Paint Frequency
+
+- Looking at the shot density plot which uses heat based color scheme (warm colors mean more shots), we see from 2021-2026 the plot consistently shows a brighter/warmer spot in the paint near or in the restricted area of the paint. This shows how the team has stayed consistent in favoring the paint as their location of shot selection. Also looking at the makes and misses graph we see that majority of the shots taken near the restricted area have been consistently made over the years.
+
+### Changes three points attempts
+
+- Visually from both graphs we can see a change in the amount and locations of three point attempts taken. Looking at 2021 the three point attempts were very close to the three point line itself. By 2025 and 2026 best seen in the density graph the amount of hexes has grown deeper and deeper out from the three point line.
+
+### Corner and Mid-range shots
+
+- First touching on change of mid-range shots which are shots inside the three point line and outside the paint. Over time as seen in both graphs we see have seen a decline and growing absence of shots in front of the three point line, shown by either the gaps of points or density hexes. Digging deeper, while this is true for shots in front of the three point arc, the corners both inside the three point line and outside have grown in the number of attempts. Along with the number of attempts increasing looking at the makes and misses graph shows that shots taken in or near the corner have high amounts of makes. 
+
+
+## Shot Efficiency around the court
+
+```{r, echo=FALSE}
+hex_bin_fg_percentage_bySeason
+```
+
+
+- This section will be diving deeper into **field goal percentage (FG%)**. By grouping shots into bins and calculating the the FG% for each seperate bin, we can see the team's overall shooting efficiency across the court. In the graph the color choices are relatively the same, for the shooting efficiency by season above the general idea is, the warmer the color the higher the FG%. Looking over the seasons we can see various changes in "hot" shot locations. Although this is true the area around the rim stays the highest concentration of high FG%.
+
+- Another observation to look at is the change of mid-range shooting efficiency. The variance in mid-range is very inconsistent. Looking at the 2022 and 2023 seasons, there is an increased FG% on the right hand side of the court for mid-ranged shots. While looking at the 2024 season the mid-range FG% was still consistent in the right hand side, but there the high FG% also grew to the top of the key.
+
+- The last key observation of the graph is the very consistent high FG% percentage in the right hand corner of the court.
+
